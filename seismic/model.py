@@ -355,6 +355,10 @@ class SeismicCLIP(nn.Module):
     def dtype(self):
         return self.visual_image.conv1.weight.dtype
 
+    @property
+    def device(self):
+        return next(iter(self.visual_image.parameters())).device
+
     def encode_image(self, image):
         return self.visual_image(image.type(self.dtype))
     
