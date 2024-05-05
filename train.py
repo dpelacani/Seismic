@@ -1,5 +1,6 @@
 import os
 import sys
+import yaml
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -15,6 +16,10 @@ from invldm.utils.visualisation import OSCAR_CMAP, visualise_samples
 from invldm.utils.utils import namespace2dict, dict2namespace, scale2range
 from invldm.utils.setup import set_seed
 
+set_seed(42)
+
+DEVICE="cuda:1"
+
 if __name__ == "__main__":
 
     dataset_args = dict2namespace(dict(
@@ -23,17 +28,18 @@ if __name__ == "__main__":
         maxsamples=None,
         slowness=False,
         resize=[256, 256],
-        # scale=False,
         scale=[0., 1.],
-        clip_outliers=False,
+        clip_outliers=None,
         to_tensor=False,
-        normalise=False,
+        normalise=(0.10280502008738208, 0.22698244373387108),
         antialias=True,
         condition = dict(
-            mode="stack",
-            path="/home/dp4018/data/ultrasound-data/Ultrasound-Vp-sagittal-data/acoustic/data/stack/",
-            resize=[128, 128],
-            scale=[0., 1.],
+            mode="stack-stack-pca-single-256x256",
+            path="/home/dp4018/data/ultrasound-data/Ultrasound-Vp-sagittal-data/acoustic/data/stack_pca_single/data",
+            # mode="stack",
+            # path="/home/dp4018/data/ultrasound-data/Ultrasound-Vp-sagittal-data/acoustic/data/stack/",
+            # resize=[256, 256],
+            # scale=[0., 1.],
             clip_outliers=False,
             to_tensor=False,
             normalise=False,
@@ -56,7 +62,7 @@ if __name__ == "__main__":
     data_resolution = data.shape[2]
     data_channels = 1
     vision_layers = 4
-    vision_width = 192
+    vision_width = 256
     vision_patch_size = 3
     mixed_precision = False
 
@@ -71,11 +77,11 @@ if __name__ == "__main__":
         vision_width,
         vision_patch_size,
         mixed_precision
-    ).to("cuda:1")
+    ).to(DEVICE)
 
     _ = summary(model)
 
-    img_f, data_f, img_logit, data_logit = model(img.to("cuda:1"), data.to("cuda:1"))
+    img_f, data_f, img_logit, data_logit = model(img.to(DEVICE), data.to(DEVICE))
 
     print("\n================ LOGITS ==================")
     print(img_logit.shape, data_logit.shape)
@@ -91,44 +97,60 @@ if __name__ == "__main__":
 
     save_freq = 500
 
-    n_epochs = 150
+
+    n_epochs = 450
     warm_restart_steps = 2000
     bias_weight_decay = False
     loss_fn = torch.nn.CrossEntropyLoss()
-    optimiser = torch.optim.Adam(model.parameters(), lr=1e-4, betas=(0.9,0.98), eps=1e-6, weight_decay=1e-4)
+    optimiser = torch.optim.Adam(model.parameters(), lr=1e-4, betas=(0.9,0.98), eps=1e-6)#, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimiser, warm_restart_steps)
     scheduler = None
     losses = []
 
     # Initialise Weights and Biases and store hyperparameters
-    wandb.init(
+    wandb_run = wandb.init(
         project="SeismicClip",
+        save_code=True,
+        group="hyper_tune",
+        dir="./exps",
         config={
-            "epochs": n_epochs,
-            "warm_restart_steps": warm_restart_steps,
-            "batch_size": dataloader.batch_size,
-            "optimiser": {"name":optimiser.__class__.__name__,
-                        "betas": optimiser.defaults["betas"],
-                        "weight_decay": optimiser.defaults["weight_decay"],
-                        "eps": optimiser.defaults["eps"]},
-            "bias_weight_decay": bias_weight_decay if optimiser.defaults["weight_decay"] > 0 else "N/A",
-            "lr": optimiser.defaults["lr"],
-            "lr_sched": scheduler,
-            "nsamples": len(dataset),
-            "embed_dim": embed_dim,
-            "embed_size": embed_size,
-            "images_resolution": images_resolution,
-            "images_channels": images_channels,
-            "data_resolution": data_resolution,
-            "data_channels": data_channels,
-            "vision_layers": vision_layers,
-            "vision_width": vision_width,
-            "vision_patch_size": vision_patch_size,
-            "mixed_precision": mixed_precision,
-            # "comment": "original clip parameters (some scaling by 4 given the data dimension)",
-            "loss_fn": str(loss_fn)
-            }
-        )
+            "data":namespace2dict(dataset_args),
+            "training":{
+                "epochs": n_epochs,
+            },
+            "model": {
+                "embed_dim": embed_dim,
+                "embed_size": embed_size,
+                "images_resolution": images_resolution,
+                "images_channels": images_channels,
+                "data_resolution": data_resolution,
+                "data_channels": data_channels,
+                "vision_layers": vision_layers,
+                "vision_width": vision_width,
+                "vision_patch_size": vision_patch_size,
+                "mixed_precision": mixed_precision,
+                # "comment": "original clip parameters (some scaling by 4 given the data dimension)",
+                "loss_fn": str(loss_fn)
+            },
+            "optim":{
+                "optimiser": {"name":optimiser.__class__.__name__,
+                            "betas": optimiser.defaults["betas"],
+                            "weight_decay": optimiser.defaults["weight_decay"],
+                            "eps": optimiser.defaults["eps"]},
+                "bias_weight_decay": bias_weight_decay if optimiser.defaults["weight_decay"] > 0 else "N/A",
+                "lr": optimiser.defaults["lr"],
+                "lr_sched": scheduler,
+                "warm_restart_steps": warm_restart_steps,
+            },
+        },
+    )
+
+    # Create exp folder and save config
+    os.mkdir(f"./exps/{wandb_run.name}")
+    os.mkdir(f"./exps/{wandb_run.name}/embeddings")
+    with open(os.path.join(f"./exps/{wandb_run.name}", "config_training.yml"), "w") as f:
+        yaml.dump(dict(wandb_run.config.items()), f, default_flow_style=False, sort_keys=False, indent=4)
+
 
     # Change weight decay of biases to zero if prompted
     if not bias_weight_decay and optimiser.defaults["weight_decay"] > 0:
@@ -148,46 +170,72 @@ if __name__ == "__main__":
     step = 0
 
     # Train
-    for epoch in tqdm(range(n_epochs)):
-        for img, data in dataloader:
-            with torch.autocast(device_type="cuda"):
-                # Get logits
-                _, _, logit_im, logit_dt = model(img.to("cuda:1"), data.to("cuda:1"))
+    try:
+        for epoch in tqdm(range(n_epochs)):
+            for img, data in dataloader:
+                with torch.autocast(device_type="cuda" if "cuda" in DEVICE else "cpu"):
+                    # Get logits
+                    _, _, logit_im, logit_dt = model(img.to(DEVICE), data.to(DEVICE))
 
-                # Compute  loss
-                targets = torch.arange(img.shape[0]).to("cuda:1")
-                loss = 0.5*(loss_fn(logit_im, targets) + loss_fn(logit_dt, targets))
-                
-            # Store loss
-            losses.append(loss.item())
+                    # Compute  loss
+                    targets = torch.arange(img.shape[0]).to(DEVICE)
+                    loss = 0.5*(loss_fn(logit_im, targets) + loss_fn(logit_dt, targets))
+                    
+                # Store loss
+                losses.append(loss.item())
 
-            # Log wandb
-            wandb.log({
-                "train/train_loss": loss,
-                "train/epoch": epoch,
-            })
-            if step % save_freq == 0:
-                w_logit_im = wandb.Image(logit_im, caption=f"Logits of Images - step {step}")
-                w_logit_dt = wandb.Image(logit_dt, caption=f"Logits of Data - step {step}")
+                # Log wandb
                 wandb.log({
-                    "train/logit_images": w_logit_im,
-                    "train/logit_data": w_logit_dt,
+                    "train/train_loss": loss,
+                    "train/epoch": epoch,
                 })
+                if step % save_freq == 0 or step == n_epochs*len(dataloader)-1:
+                    w_logit_im = wandb.Image(logit_im, caption=f"Logits of Images - step {step}")
+                    w_logit_dt = wandb.Image(logit_dt, caption=f"Logits of Data - step {step}")
+                    wandb.log({
+                        "train/logit_images": w_logit_im,
+                        "train/logit_data": w_logit_dt,
+                    })
 
-            # Zero grad and back propagation
-            optimiser.zero_grad()
-            loss.backward()
+                    torch.save({
+                        "model": model,
+                        "epoch": epoch,
+                        "step": step,
+                        "optimiser": optimiser,
+                        "dataset": dataset,
+                        "lr_scheduler": scheduler,
+                        "losses": losses,
+                    }, f"./exps/{wandb_run.name}/{wandb_run.name}-ckpt.pt")
+
+                # Zero grad and back propagation
+                optimiser.zero_grad()
+                loss.backward()
 
 
-            # Update gradients and scheduler
-            optimiser.step()
-            # scheduler.step()
+                # Update gradients and scheduler
+                optimiser.step()
+                # scheduler.step()
 
-            # Clip logit scaler
-            with torch.no_grad():
-                model.logit_scale.clamp_(max=np.log(100))
+                # Clip logit scaler
+                with torch.no_grad():
+                    model.logit_scale.clamp_(max=np.log(100))
 
-            # Increment step Count
-            step += 1
-
+                # Increment step Count
+                step+= 1
+    except KeyboardInterrupt:
+        wandb.finish()
     wandb.finish()
+
+    # Evaluate dataset
+    N = len(dataset)
+    for i in range(N):
+        d_path = dataset.data_paths[i]
+        d_name = d_path.split("/")[-1].split(".")[0] 
+        img, data = dataset[i]
+        
+        image_features = model.encode_image(img.unsqueeze(0).to(next(iter(model.parameters())).device)).detach().cpu().numpy()
+        data_features = model.encode_data(data.unsqueeze(0).to(next(iter(model.parameters())).device)).detach().cpu().numpy()
+
+        np.save(f"./exps/{wandb_run.name}/embeddings/{d_name}-sclip-data-features.npy", data_features[0])
+        np.save(f"./exps/{wandb_run.name}/embeddings/{d_name}-sclip-image-features.npy", image_features[0])
+
