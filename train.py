@@ -18,7 +18,7 @@ from invldm.utils.setup import set_seed
 
 set_seed(42)
 
-DEVICE="cuda:1"
+DEVICE="cuda:0"
 
 if __name__ == "__main__":
 
@@ -29,18 +29,18 @@ if __name__ == "__main__":
         slowness=False,
         resize=[256, 256],
         scale=[0., 1.],
-        clip_outliers=None,
+        clip_outliers="outer",
         to_tensor=False,
-        normalise=(0.10280502008738208, 0.22698244373387108),
+        # normalise=(0.10280502008738208, 0.22698244373387108),
+        normalise=False,
         antialias=True,
         condition = dict(
-            mode="stack-stack-pca-single-256x256",
-            path="/home/dp4018/data/ultrasound-data/Ultrasound-Vp-sagittal-data/acoustic/data/stack_pca_single/data",
-            # mode="stack",
-            # path="/home/dp4018/data/ultrasound-data/Ultrasound-Vp-sagittal-data/acoustic/data/stack/",
-            # resize=[256, 256],
-            # scale=[0., 1.],
-            clip_outliers=False,
+            # mode="stack-stack-pca-single-256x256",
+            # path="/home/dp4018/data/ultrasound-data/Ultrasound-Vp-sagittal-data/acoustic/data/stack_pca_single/data",
+            mode="stack-512x512",
+            path="/home/dp4018/data/ultrasound-data/Ultrasound-Vp-sagittal-data/acoustic/data/stack_resized/",
+            scale=[0., 1.],
+            clip_outliers="outer",
             to_tensor=False,
             normalise=False,
             antialias=True,
@@ -55,14 +55,14 @@ if __name__ == "__main__":
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=dataset_args.batch_size, sampler=sampler)
     img, data = next(iter(dataloader))
 
-    embed_dim = 4
+    embed_dim = 3
     embed_size = 32
     images_resolution = img.shape[2]
     images_channels = 1
     data_resolution = data.shape[2]
     data_channels = 1
-    vision_layers = 4
-    vision_width = 256
+    vision_layers = 2
+    vision_width = 64
     vision_patch_size = 3
     mixed_precision = False
 
